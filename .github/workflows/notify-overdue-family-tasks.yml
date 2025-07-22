@@ -1,0 +1,66 @@
+name: Notify Overdue Family Tasks
+
+on:
+  schedule:
+    # Run every 10 minutes
+    - cron: '*/10 * * * *'
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  call-overdue-notifications:
+    runs-on: ubuntu-latest
+    name: Call notify-overdue-family-tasks Edge Function
+    
+    steps:
+      - name: Call Edge Function
+        run: |
+          echo "🕐 Starting overdue family task notification check at $(date)"
+          
+          # Call the Edge Function
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://wtuwjqvgkpbvfcplkhvo.functions.supabase.co/notify-overdue-family-tasks" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Content-Type: application/json")
+          
+          # Extract response body and status code
+          http_code=$(echo "$response" | tail -n1)
+          response_body=$(echo "$response" | head -n -1)
+          
+          echo "�� Response Status: $http_code"
+          echo "📄 Response Body: $response_body"
+          
+          # Check if the request was successful
+          if [ "$http_code" -eq 200 ]; then
+            echo "✅ Edge Function executed successfully"
+            
+            # Parse and display the results
+            notifications_sent=$(echo "$response_body" | jq -r '.notificationsSent // 0')
+            notifications_skipped=$(echo "$response_body" | jq -r '.notificationsSkipped // 0')
+            notifications_failed=$(echo "$response_body" | jq -r '.notificationsFailed // 0')
+            
+            echo "�� Notifications sent: $notifications_sent"
+            echo "⏭️ Notifications skipped: $notifications_skipped"
+            echo "❌ Notifications failed: $notifications_failed"
+            
+            # Exit successfully
+            exit 0
+          else
+            echo "❌ Edge Function failed with status code: $http_code"
+            echo "Error response: $response_body"
+            exit 1
+          fi
+        
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      
+      - name: Handle Success
+        if: success()
+        run: |
+          echo "🎉 Overdue family task notification job completed successfully"
+      
+      - name: Handle Failure
+        if: failure()
+        run: |
+          echo "💥 Overdue family task notification job failed"
+          echo "Check the logs above for details"
