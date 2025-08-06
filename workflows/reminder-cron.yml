@@ -1,0 +1,76 @@
+# =====================================================
+# GITHUB WORKFLOW: REMINDER CRON
+# Purpose: Call unified overdue notification system
+# =====================================================
+
+name: Reminder Cron
+
+on:
+  schedule:
+    # Every 30 minutes during active hours (6 AM - 11 PM Malaysia time)
+    - cron: '*/30 22-23,0-15 * * *'  # 6 AM - 11 PM Malaysia time
+  
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Test mode - run immediately'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  reminder-cron:
+    name: Process Overdue Health Tasks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check Malaysia time
+        run: |
+          echo "Current UTC time: $(date -u)"
+          echo "Malaysia time: $(TZ='Asia/Kuala_Lumpur' date)"
+          echo "Workflow triggered by: ${{ github.event_name }}"
+      
+      - name: Call unified overdue reminder system
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          echo "🕐 Calling unified overdue notification system..."
+          
+          # Call the personalized-reminders edge function
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://wtuwjqvgkpbvfcplkhvo.functions.supabase.co/personalized-reminders" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -d '{"action":"schedule_check"}')
+          
+          # Extract HTTP status code and response body
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
+          
+          echo "📊 HTTP Status: $HTTP_CODE"
+          echo "📄 Response: $RESPONSE_BODY"
+          
+          # Check if request was successful
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Reminder cron executed successfully!"
+            
+            # Try to extract processed count
+            PROCESSED=$(echo "$RESPONSE_BODY" | grep -o '"processed_count":[0-9]*' | grep -o '[0-9]*' | head -1)
+            if [ -n "$PROCESSED" ]; then
+              echo "👥 Users processed: $PROCESSED"
+            fi
+          else
+            echo "❌ Request failed with HTTP $HTTP_CODE"
+            echo "Error details: $RESPONSE_BODY"
+            
+            # Don't exit with error code if it's just a function issue
+            # Log the error but let the workflow continue
+            echo "⚠️ Edge function issue detected - check Supabase logs"
+          fi
+      
+      - name: Success notification
+        if: success()
+        run: |
+          echo "🎉 Reminder cron completed!"
+          echo "Next run in 30 minutes"
