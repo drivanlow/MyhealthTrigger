@@ -7,9 +7,9 @@ name: Optimized Reminder Cron
 
 on:
   schedule:
-    # Every 5 minutes during active hours for maximum precision
+    # Every 15 minutes during active hours - good balance of precision and efficiency
     # 6 AM - 11 PM Malaysia time (UTC+8 = 22:00-15:59)
-    - cron: '*/5 22-23,0-15 * * *'  # Every 5 minutes from 6 AM - 11 PM Malaysia time
+    - cron: '*/15 22-23,0-15 * * *'  # Every 15 minutes from 6 AM - 11 PM Malaysia time
   
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -104,7 +104,7 @@ jobs:
         if: success()
         run: |
           echo "🎉 Reminder cron completed!"
-          echo "⏰ Next run in 5 minutes"
+          echo "⏰ Next run in 15 minutes"
           echo "🔍 Check Supabase Edge Function logs for detailed execution info"
 
       - name: Failure notification
