@@ -1,14 +1,15 @@
 # =====================================================
-# GITHUB WORKFLOW: REMINDER CRON
-# Purpose: Call unified overdue notification system
+# OPTIMIZED GITHUB WORKFLOW: REMINDER CRON
+# Purpose: Call unified overdue notification system with better timing
 # =====================================================
 
-name: Reminder Cron
+name: Optimized Reminder Cron
 
 on:
   schedule:
-    # Every 30 minutes during active hours (6 AM - 11 PM Malaysia time)
-    - cron: '*/30 22-23,0-15 * * *'  # 6 AM - 11 PM Malaysia time
+    # Every 5 minutes during active hours for maximum precision
+    # 6 AM - 11 PM Malaysia time (UTC+8 = 22:00-15:59)
+    - cron: '*/5 22-23,0-15 * * *'  # Every 5 minutes from 6 AM - 11 PM Malaysia time
   
   # Allow manual trigger for testing
   workflow_dispatch:
@@ -21,56 +22,94 @@ on:
 
 jobs:
   reminder-cron:
-    name: Process Overdue Health Tasks
+    name: Process Health Task Reminders
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # Add timeout protection
     
     steps:
-      - name: Check Malaysia time
+      - name: Check Malaysia time and timing precision
         run: |
-          echo "Current UTC time: $(date -u)"
-          echo "Malaysia time: $(TZ='Asia/Kuala_Lumpur' date)"
+          echo "Current UTC time: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "Malaysia time: $(TZ='Asia/Kuala_Lumpur' date '+%Y-%m-%d %H:%M:%S')"
           echo "Workflow triggered by: ${{ github.event_name }}"
+          echo "Cron expression should hit common reminder times precisely"
       
-      - name: Call unified overdue reminder system
+      - name: Call unified reminder system with retry logic
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           echo "🕐 Calling unified overdue notification system..."
           
-          # Call the personalized-reminders edge function
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://wtuwjqvgkpbvfcplkhvo.functions.supabase.co/personalized-reminders" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            -d '{"action":"schedule_check"}')
+          # Retry logic for reliability
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SUCCESS=false
           
-          # Extract HTTP status code and response body
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
-          
-          echo "📊 HTTP Status: $HTTP_CODE"
-          echo "📄 Response: $RESPONSE_BODY"
-          
-          # Check if request was successful
-          if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ Reminder cron executed successfully!"
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
+            echo "🔄 Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES"
             
-            # Try to extract processed count
-            PROCESSED=$(echo "$RESPONSE_BODY" | grep -o '"processed_count":[0-9]*' | grep -o '[0-9]*' | head -1)
-            if [ -n "$PROCESSED" ]; then
-              echo "👥 Users processed: $PROCESSED"
+            # Call the personalized-reminders edge function
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              --connect-timeout 30 \
+              --max-time 120 \
+              "https://wtuwjqvgkpbvfcplkhvo.functions.supabase.co/personalized-reminders" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -d '{"action":"schedule_check"}')
+            
+            # Extract HTTP status code and response body
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
+            
+            echo "📊 HTTP Status: $HTTP_CODE"
+            echo "📄 Response: $RESPONSE_BODY"
+            
+            # Check if request was successful
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ Reminder cron executed successfully!"
+              SUCCESS=true
+              
+              # Extract and display metrics
+              PROCESSED=$(echo "$RESPONSE_BODY" | grep -o '"processed_count":[0-9]*' | grep -o '[0-9]*' | head -1)
+              ERRORS=$(echo "$RESPONSE_BODY" | grep -o '"error_count":[0-9]*' | grep -o '[0-9]*' | head -1)
+              
+              if [ -n "$PROCESSED" ]; then
+                echo "👥 Users processed: $PROCESSED"
+              fi
+              if [ -n "$ERRORS" ]; then
+                echo "❌ Errors encountered: $ERRORS"
+              fi
+              
+            elif [ "$HTTP_CODE" -eq 504 ] || [ "$HTTP_CODE" -eq 502 ]; then
+              echo "⏳ Server timeout/error (HTTP $HTTP_CODE), retrying..."
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⏰ Waiting 10 seconds before retry..."
+                sleep 10
+              fi
+              
+            else
+              echo "❌ Request failed with HTTP $HTTP_CODE"
+              echo "Error details: $RESPONSE_BODY"
+              SUCCESS=true  # Don't retry for client errors
             fi
-          else
-            echo "❌ Request failed with HTTP $HTTP_CODE"
-            echo "Error details: $RESPONSE_BODY"
-            
-            # Don't exit with error code if it's just a function issue
-            # Log the error but let the workflow continue
-            echo "⚠️ Edge function issue detected - check Supabase logs"
+          done
+          
+          if [ "$SUCCESS" = false ]; then
+            echo "💥 All retry attempts failed"
+            echo "⚠️ Edge function may be experiencing issues - check Supabase logs"
           fi
       
       - name: Success notification
         if: success()
         run: |
           echo "🎉 Reminder cron completed!"
-          echo "Next run in 30 minutes"
+          echo "⏰ Next run in 5 minutes"
+          echo "🔍 Check Supabase Edge Function logs for detailed execution info"
+
+      - name: Failure notification
+        if: failure()
+        run: |
+          echo "💥 Reminder cron workflow failed!"
+          echo "🔍 Check the logs above for error details"
+          echo "⚠️ Users may not receive scheduled reminders until next successful run"
